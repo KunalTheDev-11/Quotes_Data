@@ -5,6 +5,8 @@ on:
     paths:
       - 'quotes.csv'  # Runs automatically when quotes.csv changes
   workflow_dispatch:  # Allows manual triggers via the Actions tab interface
+  schedule:
+    - cron: '*/10 * * * *'  # ⏱️ AUTOMATIC ENGINE: Randomly shuffles everything every 10 minutes
 
 permissions:
   contents: write  # Grants authorization to commit and push changes back to repo
@@ -127,11 +129,9 @@ jobs:
         # Clean up temporary compilation engines
         rm -f shuffle_engine.py
         
-        # Stage everything, check if things changed, and push safely
+        # Stage everything and force push the changes safely
         git add .
-        if git diff --staged --quiet; then
-          echo "No modifications detected in quote matrices. Skipping sync."
-        else
-          git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]"
-          git push origin main
-        fi
+        
+        # Forces Git to save the position shifts even though text remains matching
+        git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]" --allow-empty
+        git push origin main
