@@ -6,7 +6,7 @@ on:
       - 'quotes.csv'  # Runs automatically when quotes.csv changes
   workflow_dispatch:  # Allows manual triggers via the Actions tab interface
   schedule:
-    - cron: '*/10 * * * *'  # ⏱️ AUTOMATIC ENGINE: Randomly shuffles everything every 10 minutes
+    - cron: '*/10 * * * *'  # AUTOMATIC ENGINE: Randomly shuffles everything every 10 minutes
 
 permissions:
   contents: write  # Grants authorization to commit and push changes back to repo
@@ -19,6 +19,8 @@ jobs:
     # Step 1: Securely pull your repository files into the runner machine
     - name: Checkout Repository Files
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Fetches full history so git pull can merge without errors
 
     # Step 2: Establish a stable python tracking backend
     - name: Set up Python
@@ -99,7 +101,6 @@ jobs:
                     total_rows = len(lang_series)
                     if total_rows == 0: continue
 
-                    # 🎲 Randomize quote layout list completely topic-by-topic
                     shuffled_series = lang_series.sample(frac=1).reset_index(drop=True)
                     total_chunks = 0
 
@@ -129,9 +130,12 @@ jobs:
         # Clean up temporary compilation engines
         rm -f shuffle_engine.py
         
-        # Stage everything and force push the changes safely
+        # Stage everything and prepare the commit message
         git add .
-        
-        # Forces Git to save the position shifts even though text remains matching
         git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]" --allow-empty
+        
+        # 🔄 FIX: Synchronize changes right before pushing to prevent collision rejections
+        git pull --rebase origin main
+        
+        # Push cleanly to the main branch
         git push origin main
