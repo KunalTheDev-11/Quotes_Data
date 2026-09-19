@@ -41,6 +41,8 @@ jobs:
         import logging
         import os
         import re
+        import random
+        import time
         import pandas as pd
 
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -82,7 +84,10 @@ jobs:
                 return
 
             grouped = df.groupby("Topic")
-            api_index = {"last_updated": "2026-09-19", "topics": {}}
+            
+            # Use dynamic high-entropy system settings for the metadata timestamp profile
+            current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
+            api_index = {"last_updated": current_time_str, "topics": {}}
             lang_mapping = {"English Quote": "english", "Hinglish Quote": "hinglish"}
 
             for topic_name, topic_df in grouped:
@@ -99,15 +104,19 @@ jobs:
                     total_rows = len(lang_series)
                     if total_rows == 0: continue
 
-                    # 🎲 Randomize quote layout list completely topic-by-topic
-                    shuffled_series = lang_series.sample(frac=1).reset_index(drop=True)
+                    # 🎲 HIGH-ENTROPY SHUFFLER ENGINE BREAKS CLOCK TRACKING LOCKS
+                    # Using systemic os.urandom context generation to secure independent unique seed streams
+                    seed_bytes = os.urandom(4)
+                    dynamic_seed = int.from_bytes(seed_bytes, byteorder="big")
+                    
+                    shuffled_series = lang_series.sample(frac=1, random_state=dynamic_seed).reset_index(drop=True)
                     total_chunks = 0
 
                     for chunk_num, i in enumerate(range(0, total_rows, MAX_ROWS)):
-                        chunk_df = shuffled_series.iloc[i : i + MAX_ROWS]
+                        chunk_data = shuffled_series.iloc[i : i + MAX_ROWS]
                         file_name = f"{safe_topic}/{file_suffix}_part{chunk_num + 1}.json"
                         with open(file_name, "w", encoding="utf-8-sig") as jf:
-                            json.dump(chunk_df.tolist(), jf, indent=2)
+                            json.dump(chunk_data.tolist(), jf, indent=2)
                         total_chunks += 1
 
                     api_index["topics"][safe_topic][f"{file_suffix}_parts"] = total_chunks
@@ -133,5 +142,5 @@ jobs:
         git add .
         git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]" --allow-empty
         
-        # ⚡ FORCE PUSH: Forces the cloud server's local file updates to sync completely
+        # FORCE PUSH: Forces the cloud server's local file updates to sync completely
         git push origin main --force
