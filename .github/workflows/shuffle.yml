@@ -1,0 +1,137 @@
+name: Shuffle and Categorize Quotes API
+
+on:
+  push:
+    paths:
+      - 'quotes.csv'  # Runs automatically when quotes.csv changes
+  workflow_dispatch:  # Allows manual triggers via the Actions tab interface
+
+permissions:
+  contents: write  # Grants authorization to commit and push changes back to repo
+
+jobs:
+  build-and-shuffle:
+    runs-on: ubuntu-latest
+
+    steps:
+    # Step 1: Securely pull your repository files into the runner machine
+    - name: Checkout Repository Files
+      uses: actions/checkout@v4
+
+    # Step 2: Establish a stable python tracking backend
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    # Step 3: Install memory dependencies needed by the pipeline
+    - name: Install System Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pandas
+
+    # Step 4: Run the inline automated data engine script
+    - name: Execute Shuffled Compilation Core
+      run: |
+        cat << 'EOF' > shuffle_engine.py
+        import html
+        import json
+        import logging
+        import os
+        import re
+        import pandas as pd
+
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+        def clean_quote_text(text):
+            try:
+                if pd.isna(text) or not isinstance(text, str): return ""
+                text = html.unescape(text)
+                replacements = {
+                    "â€™": "'", "â€˜": "'", "â€œ": '"', "â€ ": '"', "â€“": "-",
+                    "â€”": "—", "â€¦": "...", "\xa0": " ", "ï»¿": ""
+                }
+                for bad_str, good_str in replacements.items():
+                    text = text.replace(bad_str, good_str)
+                text = re.sub(r"[“”]", '"', text)
+                text = re.sub(r"[‘’`´]", "'", text)
+                text = re.sub(r"[\r\n\t]+", " ", text)
+                return re.sub(r" +", " ", text).strip()
+            except Exception:
+                return str(text).strip()
+
+        def process_quotes():
+            input_file = "quotes.csv"
+            MAX_ROWS = 1000
+            if not os.path.exists(input_file):
+                logging.error("❌ Critical Error: quotes.csv not found in root path.")
+                return
+
+            df = None
+            for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+                try:
+                    df = pd.read_csv(input_file, encoding=enc)
+                    break
+                except Exception:
+                    continue
+
+            if df is None or df.empty or "Topic" not in df.columns:
+                logging.error("❌ Data Frame extraction or validation checkpoints failed.")
+                return
+
+            grouped = df.groupby("Topic")
+            api_index = {"last_updated": "2026-09-19", "topics": {}}
+            lang_mapping = {"English Quote": "english", "Hinglish Quote": "hinglish"}
+
+            for topic_name, topic_df in grouped:
+                if pd.isna(topic_name) or str(topic_name).strip() == "": continue
+                safe_topic = "".join(c for c in str(topic_name) if c.isalnum() or c in (" ", "_", "-")).strip()
+                if not safe_topic: safe_topic = "Unclassified_Topic"
+                os.makedirs(safe_topic, exist_ok=True)
+                api_index["topics"][safe_topic] = {"english_parts": 0, "hinglish_parts": 0}
+
+                for csv_header, file_suffix in lang_mapping.items():
+                    if csv_header not in topic_df.columns: continue
+                    lang_series = topic_df[csv_header].dropna().apply(clean_quote_text)
+                    lang_series = lang_series[lang_series != ""].drop_duplicates()
+                    total_rows = len(lang_series)
+                    if total_rows == 0: continue
+
+                    # 🎲 Randomize quote layout list completely topic-by-topic
+                    shuffled_series = lang_series.sample(frac=1).reset_index(drop=True)
+                    total_chunks = 0
+
+                    for chunk_num, i in enumerate(range(0, total_rows, MAX_ROWS)):
+                        chunk_data = shuffled_series.iloc[i : i + MAX_ROWS]
+                        file_name = f"{safe_topic}/{file_suffix}_part{chunk_num + 1}.json"
+                        with open(file_name, "w", encoding="utf-8-sig") as jf:
+                            json.dump(chunk_data.tolist(), jf, indent=2)
+                        total_chunks += 1
+
+                    api_index["topics"][safe_topic][f"{file_suffix}_parts"] = total_chunks
+
+            with open("master_index.json", "w", encoding="utf-8-sig") as idx_file:
+                json.dump(api_index, idx_file, indent=2)
+
+        if __name__ == "__main__":
+            process_quotes()
+        EOF
+        python shuffle_engine.py
+
+    # Step 5: Automatically check in and commit the modified datasets safely
+    - name: Commit and Push Updated JSON Arrays
+      run: |
+        git config --global user.name "github-actions[bot]"
+        git config --global user.email "github-actions[bot]@://github.com"
+        
+        # Clean up temporary compilation engines
+        rm -f shuffle_engine.py
+        
+        # Stage everything, check if things changed, and push safely
+        git add .
+        if git diff --staged --quiet; then
+          echo "No modifications detected in quote matrices. Skipping sync."
+        else
+          git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]"
+          git push origin main
+        fi
