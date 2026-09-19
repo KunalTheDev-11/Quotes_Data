@@ -16,11 +16,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    # Step 1: Securely pull your repository files into the runner machine
+    # Step 1: Pull your repository files into the runner machine
     - name: Checkout Repository Files
       uses: actions/checkout@v4
-      with:
-        fetch-depth: 0  # Fetches full history so git pull can merge without errors
 
     # Step 2: Establish a stable python tracking backend
     - name: Set up Python
@@ -101,14 +99,15 @@ jobs:
                     total_rows = len(lang_series)
                     if total_rows == 0: continue
 
+                    # 🎲 Randomize quote layout list completely topic-by-topic
                     shuffled_series = lang_series.sample(frac=1).reset_index(drop=True)
                     total_chunks = 0
 
                     for chunk_num, i in enumerate(range(0, total_rows, MAX_ROWS)):
-                        chunk_data = shuffled_series.iloc[i : i + MAX_ROWS]
+                        chunk_df = shuffled_series.iloc[i : i + MAX_ROWS]
                         file_name = f"{safe_topic}/{file_suffix}_part{chunk_num + 1}.json"
                         with open(file_name, "w", encoding="utf-8-sig") as jf:
-                            json.dump(chunk_data.tolist(), jf, indent=2)
+                            json.dump(chunk_df.tolist(), jf, indent=2)
                         total_chunks += 1
 
                     api_index["topics"][safe_topic][f"{file_suffix}_parts"] = total_chunks
@@ -121,21 +120,18 @@ jobs:
         EOF
         python shuffle_engine.py
 
-    # Step 5: Automatically check in and commit the modified datasets safely
-    - name: Commit and Push Updated JSON Arrays
+    # Step 5: Force push the randomized arrays back to main branch cleanly
+    - name: Commit and Force Push Updated JSON Arrays
       run: |
         git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@://github.com"
+        git config --global user.email "github-actions[bot]@users.noreply.github.com"
         
-        # Clean up temporary compilation engines
+        # Remove temporary generator file
         rm -f shuffle_engine.py
         
-        # Stage everything and prepare the commit message
+        # Stage files and execute the commit
         git add .
         git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]" --allow-empty
         
-        # 🔄 FIX: Synchronize changes right before pushing to prevent collision rejections
-        git pull --rebase origin main
-        
-        # Push cleanly to the main branch
-        git push origin main
+        # ⚡ FORCE PUSH: Forces the cloud server's local file updates to sync completely
+        git push origin main --force
