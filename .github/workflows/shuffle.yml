@@ -1,150 +1,68 @@
-name: Shuffle and Categorize Quotes API
+name: Shuffle JSON Contents
 
 on:
-  push:
-    paths:
-      - 'quotes.csv'  # Runs automatically when quotes.csv changes
-  workflow_dispatch:  # Allows manual triggers via the Actions tab interface
-  schedule:
-    - cron: '*/10 * * * *'  # ⏱️ AUTOMATIC ENGINE: Randomly shuffles everything every 10 minutes
-
-permissions:
-  contents: write  # Grants authorization to commit and push changes back to repo
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  # schedule:
+  #   - cron: '0 0 * * *' # Uncomment to run automatically every day at midnight
 
 jobs:
-  build-and-shuffle:
+  shuffle-data:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
-    # Step 1: Pull your repository files into the runner machine
-    - name: Checkout Repository Files
-      uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    # Step 2: Establish a stable python tracking backend
-    - name: Set up Python
-      uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
 
-    # Step 3: Install memory dependencies needed by the pipeline
-    - name: Install System Dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install pandas
+      - name: Shuffle JSON arrays
+        run: |
+          python -c '
+          import os, json, random
+          
+          # Walk through all directories and files
+          for root, dirs, files in os.walk("."):
+              # Skip hidden folders like .git and .github
+              if ".git" in root or ".github" in root:
+                  continue
+                  
+              for file in files:
+                  if file.endswith(".json"):
+                      path = os.path.join(root, file)
+                      
+                      # Read the JSON file
+                      with open(path, "r", encoding="utf-8") as f:
+                          try:
+                              data = json.load(f)
+                          except json.JSONDecodeError:
+                              print(f"Skipping {path} - Invalid JSON")
+                              continue
+                              
+                      # Shuffle only if the JSON root is an array/list
+                      if isinstance(data, list):
+                          random.shuffle(data)
+                          
+                          # Write the shuffled data back to the same file
+                          with open(path, "w", encoding="utf-8") as f:
+                              json.dump(data, f, indent=4, ensure_ascii=False)
+                          print(f"Shuffled contents of {path}")
+          '
 
-    # Step 4: Run the inline automated data engine script
-    - name: Execute Shuffled Compilation Core
-      run: |
-        cat << 'EOF' > shuffle_engine.py
-        import html
-        import json
-        import logging
-        import os
-        import re
-        import random
-        import time
-        import pandas as pd
-
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-        def clean_quote_text(text):
-            try:
-                if pd.isna(text) or not isinstance(text, str): return ""
-                text = html.unescape(text)
-                replacements = {
-                    "â€™": "'", "â€˜": "'", "â€œ": '"', "â€ ": '"', "â€“": "-",
-                    "â€”": "—", "â€¦": "...", "\xa0": " ", "ï»¿": ""
-                }
-                for bad_str, good_str in replacements.items():
-                    text = text.replace(bad_str, good_str)
-                text = re.sub(r"[“”]", '"', text)
-                text = re.sub(r"[‘’`´]", "'", text)
-                text = re.sub(r"[\r\n\t]+", " ", text)
-                return re.sub(r" +", " ", text).strip()
-            except Exception:
-                return str(text).strip()
-
-        def process_quotes():
-            input_file = "quotes.csv"
-            MAX_ROWS = 1000
-            if not os.path.exists(input_file):
-                logging.error("❌ Critical Error: quotes.csv not found in root path.")
-                return
-
-            df = None
-            for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
-                try:
-                    df = pd.read_csv(input_file, encoding=enc)
-                    break
-                except Exception:
-                    continue
-
-            if df is None or df.empty or "Topic" not in df.columns:
-                logging.error("❌ Data Frame extraction or validation checkpoints failed.")
-                return
-
-            grouped = df.groupby("Topic")
-            
-            # High-entropy tracking key details
-            current_time_str = time.strftime("%Y-%m-%d %H:%M:%S")
-            api_index = {"last_updated": current_time_str, "topics": {}}
-            lang_mapping = {"English Quote": "english", "Hinglish Quote": "hinglish"}
-
-            for topic_name, topic_df in grouped:
-                if pd.isna(topic_name) or str(topic_name).strip() == "": continue
-                safe_topic = "".join(c for c in str(topic_name) if c.isalnum() or c in (" ", "_", "-")).strip()
-                if not safe_topic: safe_topic = "Unclassified_Topic"
-                os.makedirs(safe_topic, exist_ok=True)
-                api_index["topics"][safe_topic] = {"english_parts": 0, "hinglish_parts": 0}
-
-                for csv_header, file_suffix in lang_mapping.items():
-                    if csv_header not in topic_df.columns: continue
-                    lang_series = topic_df[csv_header].dropna().apply(clean_quote_text)
-                    lang_series = lang_series[lang_series != ""].drop_duplicates()
-                    total_rows = len(lang_series)
-                    if total_rows == 0: continue
-
-                    # 🎲 High-entropy system seed stream generator broken clock lock bypasses
-                    seed_bytes = os.urandom(4)
-                    dynamic_seed = int.from_bytes(seed_bytes, byteorder="big")
-                    
-                    shuffled_series = lang_series.sample(frac=1, random_state=dynamic_seed).reset_index(drop=True)
-                    total_chunks = 0
-
-                    for chunk_num, i in enumerate(range(0, total_rows, MAX_ROWS)):
-                        chunk_data = shuffled_series.iloc[i : i + MAX_ROWS]
-                        
-                        # Pack quotes directly into a dedicated wrapper object alongside a unique execution token key string
-                        # This forces Git to recognize the files as modified data payloads on every execution
-                        unique_run_token = f"token_{dynamic_seed}_{chunk_num}_{int(time.time())}"
-                        wrapped_api_payload = {
-                            "generation_id": unique_run_token,
-                            "quotes_list": chunk_data.tolist()
-                        }
-
-                        file_name = f"{safe_topic}/{file_suffix}_part{chunk_num + 1}.json"
-                        with open(file_name, "w", encoding="utf-8-sig") as jf:
-                            json.dump(wrapped_api_payload, jf, indent=2)
-                        total_chunks += 1
-
-                    api_index["topics"][safe_topic][f"{file_suffix}_parts"] = total_chunks
-
-            with open("master_index.json", "w", encoding="utf-8-sig") as idx_file:
-                json.dump(api_index, idx_file, indent=2)
-
-        if __name__ == "__main__":
-            process_quotes()
-        EOF
-        python shuffle_engine.py
-
-    # Step 5: Force push the randomized arrays back to main branch cleanly
-    - name: Commit and Force Push Updated JSON Arrays
-      run: |
-        git config --global user.name "github-actions[bot]"
-        git config --global user.email "github-actions[bot]@users.noreply.github.com"
-        
-        # Remove temporary compiler utility
-        rm -f shuffle_engine.py
-        
-        # Track, tag, and execute force push sync configurations
-        git add .
-        git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]" --allow-empty
-        git push origin main --force
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          
+          # Check if there are any changes to commit to prevent errors
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]"
+            git push
+          fi
