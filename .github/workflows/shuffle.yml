@@ -3,7 +3,8 @@ name: Shuffle JSON Contents
 on:
   workflow_dispatch: # Allows you to run this manually from the Actions tab
   schedule:
-    - cron: '*/10 * * * *' # Runs automatically every 10 minutes
+    - cron: '7/10 * * * *'
+
 
 jobs:
   shuffle-data:
