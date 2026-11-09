@@ -1,15 +1,19 @@
 name: Shuffle JSON Contents
 
 on:
-  workflow_dispatch: # Allows you to run this manually from the Actions tab
+  workflow_dispatch:
   schedule:
-  - cron: '11 * * * *'
+    - cron: '11 * * * *'
 
-
+# Prevent overlapping runs from fighting over the same push
+concurrency:
+  group: shuffle-json
+  cancel-in-progress: false
 
 jobs:
   shuffle-data:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
@@ -23,48 +27,103 @@ jobs:
           python-version: '3.x'
 
       - name: Shuffle JSON arrays
+        shell: python
         run: |
-          python -c '
-          import os, json, random
-          
-          # Walk through all directories and files
+          import json
+          import os
+          import re
+          import secrets
+          import tempfile
+
+          SKIP_DIRS = {".git", ".github", "node_modules", ".venv", "venv", "__pycache__"}
+          SKIP_FILES = {"package.json", "package-lock.json", "tsconfig.json", "composer.json"}
+
+          rng = secrets.SystemRandom()  # cryptographically strong randomness
+
+          def detect_indent(text):
+              """Keep the file's original formatting (compact vs indented)."""
+              m = re.search(r"\n([ \t]+)\S", text)
+              if not m:
+                  return None  # compact / single-line
+              ws = m.group(1)
+              return "\t" if ws.startswith("\t") else len(ws)
+
+          def shuffled(items):
+              """Shuffle and guarantee the order actually changes when possible."""
+              original = list(items)
+              if len(original) < 2:
+                  return original
+              result = original[:]
+              for _ in range(10):
+                  rng.shuffle(result)
+                  if result != original:
+                      break
+              return result
+
+          shuffled_count = skipped = 0
+
           for root, dirs, files in os.walk("."):
-              # Skip hidden folders like .git and .github
-              if ".git" in root or ".github" in root:
-                  continue
-                  
-              for file in files:
-                  if file.endswith(".json"):
-                      path = os.path.join(root, file)
-                      
-                      # Read the JSON file
+              # Prune skipped directories so we never descend into them
+              dirs[:] = [d for d in dirs if d not in SKIP_DIRS]
+
+              for name in files:
+                  if not name.endswith(".json") or name in SKIP_FILES:
+                      continue
+
+                  path = os.path.join(root, name)
+
+                  try:
                       with open(path, "r", encoding="utf-8-sig") as f:
-                          try:
-                              data = json.load(f)
-                          except json.JSONDecodeError:
-                              print(f"Skipping {path} - Invalid JSON")
-                              continue
-                              
-                      # Shuffle only if the JSON root is an array/list
-                      if isinstance(data, list):
-                          random.shuffle(data)
-                          
-                          # Write the shuffled data back to the same file
-                          with open(path, "w", encoding="utf-8") as f:
-                              json.dump(data, f, indent=4, ensure_ascii=False)
-                          print(f"Shuffled contents of {path}")
-          '
+                          raw = f.read()
+                      data = json.loads(raw)
+                  except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+                      print(f"Skipping {path}: {e}")
+                      skipped += 1
+                      continue
+
+                  if not isinstance(data, list):
+                      continue
+
+                  out = json.dumps(
+                      shuffled(data),
+                      indent=detect_indent(raw),
+                      ensure_ascii=False,
+                  ) + "\n"
+
+                  # Atomic write: a crash can never leave a half-written file
+                  fd, tmp = tempfile.mkstemp(dir=root, suffix=".tmp")
+                  try:
+                      with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+                          f.write(out)
+                      os.replace(tmp, path)
+                  except Exception:
+                      os.unlink(tmp)
+                      raise
+
+                  shuffled_count += 1
+                  print(f"Shuffled {path} ({len(data)} items)")
+
+          print(f"Done: {shuffled_count} shuffled, {skipped} skipped")
 
       - name: Commit and push changes
         run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          
-          # Check if there are any changes to commit to prevent errors
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add -A -- '*.json'
+
           if git diff --staged --quiet; then
             echo "No changes to commit."
-          else
-            git commit -m "Automated Cloud API Shuffle Matrix Update [Skip CI]"
-            git push
+            exit 0
           fi
+
+          git commit -m "chore: automated JSON shuffle [skip ci]"
+
+          # Retry with rebase in case something else pushed in the meantime
+          for i in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push && exit 0
+            echo "Push failed, retrying ($i/3)..."
+            sleep 5
+          done
+          echo "Failed to push after 3 attempts" >&2
+          exit 1
